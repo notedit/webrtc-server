@@ -52,8 +52,8 @@ type DTLSConnection struct {
 func NewDTLSConnection() *DTLSConnection {
 
 	dtls := &DTLSConnection{}
-	dtls.packetsIn = make(chan *packet.UDP, 5)
-	dtls.packetsOut = make(chan *packet.UDP, 5)
+	dtls.packetsIn = make(chan *packet.UDP, 10)
+	dtls.packetsOut = make(chan *packet.UDP, 10)
 	dtls.remoteParameters = &sdp.DTLSInfo{}
 	dtls.localSetup = sdp.SETUPPASSIVE
 
