@@ -6,28 +6,71 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"io"
 	"math/big"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/notedit/sdp"
-	"github.com/notedit/webrtc-server/packet"
 	"github.com/pion/dtls/v2"
 	"github.com/pion/srtp"
+
+	"github.com/pion/transport/packetio"
 )
 
-func init() {
+const maxBufferSize = 1000 * 1000
 
-	//
+type dtlsendpoint struct {
+	outbuffer *packetio.Buffer
+	inbuffer  *packetio.Buffer
+}
+
+func (e *dtlsendpoint) Close() (err error) {
+
+	return nil
+}
+
+func (e *dtlsendpoint) Read(data []byte) (int, error) {
+
+	return 0, nil
+}
+
+func (e *dtlsendpoint) Write(data []byte) (int, error) {
+
+	return 0, nil
+}
+
+// LocalAddr is a stub
+func (e *dtlsendpoint) LocalAddr() net.Addr {
+	return nil
+}
+
+// RemoteAddr is a stub
+func (e *dtlsendpoint) RemoteAddr() net.Addr {
+	return nil
+}
+
+// SetDeadline is a stub
+func (e *dtlsendpoint) SetDeadline(t time.Time) error {
+	return nil
+}
+
+// SetReadDeadline is a stub
+func (e *dtlsendpoint) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+// SetWriteDeadline is a stub
+func (e *dtlsendpoint) SetWriteDeadline(t time.Time) error {
+	return nil
 }
 
 type DTLSConnection struct {
-	sync.RWMutex
+	lock sync.RWMutex
 
 	privateKey crypto.PrivateKey
 	x509Cert   *x509.Certificate
@@ -37,9 +80,7 @@ type DTLSConnection struct {
 
 	conn *dtls.Conn
 
-	packetsIn  chan *packet.UDP
-	packetsOut chan *packet.UDP
-
+	entpoint     *dtlsendpoint
 	srtpSession  *srtp.SessionSRTP
 	srtcpSession *srtp.SessionSRTCP
 
@@ -52,23 +93,22 @@ type DTLSConnection struct {
 func NewDTLSConnection() *DTLSConnection {
 
 	dtls := &DTLSConnection{}
-	dtls.packetsIn = make(chan *packet.UDP, 10)
-	dtls.packetsOut = make(chan *packet.UDP, 10)
 	dtls.remoteParameters = &sdp.DTLSInfo{}
 	dtls.localSetup = sdp.SETUPPASSIVE
 
+	endpoint := &dtlsendpoint{}
+	endpoint.inbuffer = packetio.NewBuffer()
+	endpoint.outbuffer = packetio.NewBuffer()
+	endpoint.inbuffer.SetLimitSize(maxBufferSize)
+	endpoint.outbuffer.SetLimitSize(maxBufferSize)
+
+	dtls.entpoint = endpoint
 	return dtls
 }
 
 func (d *DTLSConnection) Init() error {
 
 	return nil
-}
-
-// SetSRTPProtectionProfiles  options
-func (d *DTLSConnection) SetSRTPProtectionProfiles() {
-
-	// options
 }
 
 // SetRemoteSetup set remote setup
@@ -80,6 +120,44 @@ func (d *DTLSConnection) SetRemoteSetup(setup sdp.Setup) {
 func (d *DTLSConnection) SetRemoteFingerprint(hash string, fingerprint string) {
 	d.remoteHash = hash
 	d.remoteFingerprint = fingerprint
+}
+
+func (d *DTLSConnection) SetRemoteDTLS(dtls *sdp.DTLSInfo) {
+
+}
+
+func (d *DTLSConnection) GetLocalDTLS() *sdp.DTLSInfo {
+
+	return nil
+}
+
+func (d *DTLSConnection) Start() (err error) {
+
+	var dtlsConn *dtls.Conn
+
+	dtlsConfig := &dtls.Config{
+		Certificates: []tls.Certificate{
+			{
+				Certificate: [][]byte{d.x509Cert.Raw},
+				PrivateKey:  d.privateKey,
+			},
+		},
+		SRTPProtectionProfiles: []dtls.SRTPProtectionProfile{dtls.SRTP_AES128_CM_HMAC_SHA1_80},
+		ClientAuth:             dtls.RequireAnyClientCert,
+		InsecureSkipVerify:     true,
+	}
+
+	// todo
+	isClient := true
+
+	if isClient {
+		dtlsConn, err = dtls.Client(d.entpoint, dtlsConfig)
+	} else {
+		dtlsConn, err = dtls.Server(d.entpoint, dtlsConfig)
+	}
+
+	d.conn = dtlsConn
+	return
 }
 
 // GenerateCertificate generate a local certificate
@@ -135,49 +213,13 @@ func (d *DTLSConnection) Close() {
 }
 
 func (d *DTLSConnection) Write(data []byte) (int, error) {
-
-	packet := packet.NewUDPFromData(data, nil)
-	d.packetsOut <- packet
-
-	return len(data), nil
+	i, err := d.entpoint.inbuffer.Write(data)
+	return i, err
 }
 
 func (d *DTLSConnection) Read(data []byte) (int, error) {
-
-	packet := <-d.packetsIn
-
-	if len(data) < packet.GetSize() {
-		return 0, io.ErrShortBuffer
-	}
-
-	n := copy(data, packet.GetData())
-
-	return n, nil
-}
-
-// SetDeadline net.Conn interface
-func (d *DTLSConnection) SetDeadline(t time.Time) error {
-	return nil
-}
-
-// SetReadDeadline net.Conn interface
-func (d *DTLSConnection) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-// SetWriteDeadline net.Conn interface
-func (d *DTLSConnection) SetWriteDeadline(t time.Time) error {
-	return nil
-}
-
-// LocalAddr net.Conn interface
-func (d *DTLSConnection) LocalAddr() net.Addr {
-	return nil
-}
-
-// RemoteAddr net.Conn interface
-func (d *DTLSConnection) RemoteAddr() net.Addr {
-	return nil
+	i, err := d.entpoint.outbuffer.Read(data)
+	return i, err
 }
 
 func newCertificate(key crypto.PrivateKey, tpl x509.Certificate) (*x509.Certificate, error) {

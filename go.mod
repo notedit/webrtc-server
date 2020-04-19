@@ -8,5 +8,6 @@ require (
 	github.com/pion/dtls/v2 v2.0.0-rc.3
 	github.com/pion/srtp v1.2.6
 	github.com/pion/stun v0.3.3
+	github.com/pion/transport v0.10.0 // indirect
 	github.com/pion/webrtc/v2 v2.1.18
 )
